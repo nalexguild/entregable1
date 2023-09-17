@@ -1,0 +1,135 @@
+---
+- name: Practica_uno
+  hosts: all
+  become: yes
+  tasks:
+    - name: Instalar paquetes
+      apt:
+        name:
+          - apache2
+          - php
+          - mysql-server
+          - php-mysql
+          - python3-pip
+        state: present
+
+    - name: instalar pymysql
+      ansible.builtin.pip:
+        name: pymysql
+        executable: pip3
+
+    - name: Clonar repositorio de GitHub PAGINA WEB
+      git:
+        repo: https://github.com/nalexguild/tarea1_paginaweb.git
+        dest: /var/www/html/pag/
+        update: no
+      notify: Reiniciar Apache
+
+    - name: Clonar repositorio de GitHub APP BASE DE DATOS
+      git:
+        repo: https://github.com/nalexguild/tarea1.git
+        dest: /var/www/html/tarea1/
+        update: no
+      notify: Reiniciar Apache
+
+    - name: Configurar dominios
+      blockinfile:
+        path: /etc/hosts
+        block: |
+          192.168.1.10 www.agomez.com
+          192.168.1.10 app.agomez.com
+
+    - name: Crear archivo de configuracion para www.agomez.com
+      copy:
+        content: |
+          <VirtualHost *:80>
+              ServerAdmin alexisga12@hotmail.com
+              ServerName www.agomez.com
+              ServerAlias agomez.com
+              DocumentRoot /var/www/html/pag
+
+              ErrorLog ${APACHE_LOG_DIR}/error.log
+              CustomLog ${APACHE_LOG_DIR}/access.log combined
+          </VirtualHost>
+        dest: /etc/apache2/sites-available/agomez.conf
+        force: no
+
+    - name: Crear archivo de configuracion para app.agomez.com
+      copy:
+        content: |
+          <VirtualHost *:80>
+              ServerAdmin alexisga12@hotmail.com
+              ServerName app.agomez.com
+              DocumentRoot /var/www/html/tarea1
+
+              ErrorLog ${APACHE_LOG_DIR}/error.log
+              CustomLog ${APACHE_LOG_DIR}/access.log combined
+          </VirtualHost>
+        dest: /etc/apache2/sites-available/app.agomez.conf
+        force: no
+
+    - name: Cambiar contrasena de usuario en MySQL
+      ansible.builtin.mysql_user:
+        name: root
+        password: root
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+        host: localhost
+        check_implicit_admin: yes
+        login_password: root2
+      become: yes
+
+    - name: Eliminar la base de datos de prueba
+      mysql_db:
+        name: test
+        state: absent
+        login_user: root
+        login_password: root
+      when: ansible_distribution == 'Ubuntu'
+
+    - name: Eliminar cuentas anonimas en MySQL
+      mysql_user:
+        name: ''
+        host: "{{ item }}"
+        state: absent
+        login_user: root
+        login_password: root
+      with_items:
+        - 127.0.0.1
+        - 192.168.1.10
+        - localhost
+
+    - name: Configurar firewall para permitir trafico HTTP en el puerto 80
+      ufw:
+        rule: allow
+        port: 80
+      when: ansible_distribution == 'Ubuntu'
+
+    - name: Crear la base de datos
+      ansible.builtin.mysql_db:
+        name: php_mysql_crud
+        state: present
+        login_user: root
+        login_password: root
+
+    - name: Cargar esquema de base de datos desde un archivo SQL
+      ansible.builtin.mysql_db:
+        name: php_mysql_crud
+        state: import
+        login_user: root
+        login_password: root
+        login_host: localhost
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+        target: /var/www/html/tarea1/database/script.sql
+      when: inventory_hostname == "server1"
+
+    - name: Deshabilitar sitio web predeterminado
+      command: a2dissite 000-default.conf
+
+    - name: Habilitar sitios web
+      command: a2ensite agomez.conf app.agomez.conf
+
+  handlers:
+    - name: Reiniciar Apache
+      service:
+        name: apache2
+        state: restarted
